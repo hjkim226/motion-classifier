@@ -52,7 +52,10 @@ def run_epoch(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", default=".", help="Folder containing samples or one sample folder.")
+    parser.add_argument("--val-root", default=None, help="Optional validation split folder.")
+    parser.add_argument("--test-root", default=None, help="Optional test split folder.")
     parser.add_argument("--point-file", default="pointclouds.npy")
+    parser.add_argument("--label-mode", choices=("fine", "coarse"), default="fine")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -66,6 +69,7 @@ def main() -> None:
         point_file=args.point_file,
         max_frames=args.max_frames,
         max_points=args.max_points,
+        label_mode=args.label_mode,
     )
     if len(dataset.label_to_id) < 2:
         raise ValueError(
@@ -73,18 +77,46 @@ def main() -> None:
             f"{len(dataset)} sample(s) and labels={dataset.label_to_id}."
         )
 
-    val_size = max(1, int(len(dataset) * 0.2))
-    train_size = len(dataset) - val_size
-    if train_size < 1:
-        raise ValueError("Need at least two samples to create a train/validation split.")
+    test_set = None
+    if args.val_root:
+        train_set = dataset
+        val_set = RadarPointCloudDataset(
+            args.val_root,
+            point_file=args.point_file,
+            max_frames=args.max_frames,
+            max_points=args.max_points,
+            label_mode=args.label_mode,
+            labels=dataset.label_to_id,
+        )
+    else:
+        val_size = max(1, int(len(dataset) * 0.2))
+        train_size = len(dataset) - val_size
+        if train_size < 1:
+            raise ValueError("Need at least two samples to create a train/validation split.")
 
-    train_set, val_set = random_split(
-        dataset,
-        [train_size, val_size],
-        generator=torch.Generator().manual_seed(42),
-    )
+        train_set, val_set = random_split(
+            dataset,
+            [train_size, val_size],
+            generator=torch.Generator().manual_seed(42),
+        )
+
+    if args.test_root:
+        test_set = RadarPointCloudDataset(
+            args.test_root,
+            point_file=args.point_file,
+            max_frames=args.max_frames,
+            max_points=args.max_points,
+            label_mode=args.label_mode,
+            labels=dataset.label_to_id,
+        )
+
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    test_loader = (
+        DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
+        if test_set is not None
+        else None
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = RadarMotionNet(
@@ -114,12 +146,18 @@ def main() -> None:
                 {
                     "model": model.state_dict(),
                     "label_to_id": dataset.label_to_id,
+                    "label_mode": args.label_mode,
                     "max_frames": args.max_frames,
                     "max_points": args.max_points,
                 },
                 output_dir / "best.pt",
             )
 
+    if test_loader is not None:
+        checkpoint = torch.load(output_dir / "best.pt", map_location=device)
+        model.load_state_dict(checkpoint["model"])
+        test_loss, test_acc = run_epoch(model, test_loader, criterion, device)
+        print(f"test_loss={test_loss:.4f} test_acc={test_acc:.3f}")
 
 if __name__ == "__main__":
     main()
