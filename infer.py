@@ -18,6 +18,7 @@ def main() -> None:
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
     label_to_id = checkpoint["label_to_id"]
+    label_mode = checkpoint.get("label_mode", "fine")
     id_to_label = {idx: label for label, idx in label_to_id.items()}
 
     dataset = RadarPointCloudDataset(
@@ -25,10 +26,18 @@ def main() -> None:
         point_file=args.point_file,
         max_frames=checkpoint["max_frames"],
         max_points=checkpoint["max_points"],
+        label_mode=label_mode,
         labels=label_to_id,
     )
     batch = dataset[0]
-    model = RadarMotionNet(num_classes=len(label_to_id), max_frames=checkpoint["max_frames"])
+    model = RadarMotionNet(
+        num_classes=len(label_to_id),
+        frame_dim=checkpoint.get("frame_dim", 256),
+        temporal_layers=checkpoint.get("temporal_layers", 3),
+        temporal_heads=checkpoint.get("temporal_heads", 4),
+        dropout=checkpoint.get("dropout", 0.1),
+        max_frames=checkpoint["max_frames"],
+    )
     model.load_state_dict(checkpoint["model"])
     model.eval()
 
