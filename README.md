@@ -28,11 +28,13 @@ dataset/
 Create a reproducible train/validation/test split:
 
 ```bash
-python3 split_dataset.py --source dataset --output data --force
+python3 split_dataset.py --source dataset --output data --stratify-by coarse --force
 ```
 
 This writes `data/train`, `data/validation`, and `data/test` as symlinks by default, plus
-`data/split_manifest.json`. Pass `--mode copy` if you need physical copies instead.
+`data/split_manifest.json`. The default split is stratified by the coarse
+`cooking` / `eating` / `cleanup` / `other` labels. Pass `--stratify-by env` to
+split by scene environment instead, or `--mode copy` if you need physical copies.
 
 Install dependencies:
 
@@ -64,6 +66,24 @@ python3 train.py \
   --epochs 50
 ```
 
+Training prints validation and test confusion matrices and saves all metrics to
+`runs/pointnet_transformer/metrics.json`.
+
+For a smaller model that may generalize better on this dataset:
+
+```bash
+python3 train.py \
+  --data-root data/train \
+  --val-root data/validation \
+  --test-root data/test \
+  --label-mode coarse \
+  --frame-dim 128 \
+  --temporal-layers 1 \
+  --temporal-heads 2 \
+  --dropout 0.3 \
+  --epochs 50 \
+  --output-dir runs/coarse_small
+```
 
 Run inference:
 

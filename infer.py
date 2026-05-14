@@ -30,7 +30,14 @@ def main() -> None:
         labels=label_to_id,
     )
     batch = dataset[0]
-    model = RadarMotionNet(num_classes=len(label_to_id), max_frames=checkpoint["max_frames"])
+    model = RadarMotionNet(
+        num_classes=len(label_to_id),
+        frame_dim=checkpoint.get("frame_dim", 256),
+        temporal_layers=checkpoint.get("temporal_layers", 3),
+        temporal_heads=checkpoint.get("temporal_heads", 4),
+        dropout=checkpoint.get("dropout", 0.1),
+        max_frames=checkpoint["max_frames"],
+    )
     model.load_state_dict(checkpoint["model"])
     model.eval()
 

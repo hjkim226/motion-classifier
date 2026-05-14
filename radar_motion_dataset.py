@@ -9,27 +9,45 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from label_utils import COARSE_LABEL_TO_ID, classify_coarse_label
 
 @dataclass(frozen=True)
 class RadarSample:
     path: Path
     label: str
+    fine_label: str
+    coarse_label: str
 
 
-def read_prompt_label(sample_dir: Path) -> str:
+def read_prompt_fields(sample_dir: Path) -> dict[str, str]:
     prompt_path = sample_dir / "prompt.txt"
     if not prompt_path.exists():
-        return sample_dir.name
+        return {}
 
     fields: dict[str, str] = {}
     for line in prompt_path.read_text(encoding="utf-8").splitlines():
         if ":" in line:
             key, value = line.split(":", 1)
             fields[key.strip().lower()] = value.strip()
-    return fields.get("name") or sample_dir.name
+    return fields
 
 
-def discover_samples(root: Path) -> list[RadarSample]:
+def sample_label(sample_dir: Path, label_mode: str) -> tuple[str, str, str]:
+    fields = read_prompt_fields(sample_dir)
+    fine_label = fields.get("name") or sample_dir.name
+    coarse_label = classify_coarse_label(
+        fine_label,
+        desc=fields.get("desc", ""),
+        env=fields.get("env", ""),
+    )
+    if label_mode == "fine":
+        return fine_label, fine_label, coarse_label
+    if label_mode == "coarse":
+        return coarse_label, fine_label, coarse_label
+    raise ValueError(f"Unsupported label_mode={label_mode!r}")
+
+
+def discover_samples(root: Path, label_mode: str = "fine") -> list[RadarSample]:
     """Find sample folders that contain point-cloud radar data."""
     root = root.expanduser().resolve()
     candidates: Iterable[Path]
@@ -41,7 +59,15 @@ def discover_samples(root: Path) -> list[RadarSample]:
     samples: list[RadarSample] = []
     for sample_dir in candidates:
         if (sample_dir / "pointclouds.npy").exists() or (sample_dir / "radarllm_6d.npy").exists():
-            samples.append(RadarSample(path=sample_dir, label=read_prompt_label(sample_dir)))
+            label, fine_label, coarse_label = sample_label(sample_dir, label_mode)
+            samples.append(
+                RadarSample(
+                    path=sample_dir,
+                    label=label,
+                    fine_label=fine_label,
+                    coarse_label=coarse_label,
+                )
+            )
     if not samples:
         raise FileNotFoundError(f"No sample folders with pointclouds.npy or radarllm_6d.npy under {root}")
     return samples
@@ -64,17 +90,22 @@ class RadarPointCloudDataset(Dataset):
         point_file: str = "pointclouds.npy",
         max_frames: int = 64,
         max_points: int = 128,
+        label_mode: str = "fine",
         labels: Optional[dict[str, int]] = None,
     ) -> None:
         self.root = Path(root)
-        self.samples = discover_samples(self.root)
+        self.label_mode = label_mode
+        self.samples = discover_samples(self.root, label_mode=label_mode)
         self.point_file = point_file
         self.max_frames = max_frames
         self.max_points = max_points
 
         if labels is None:
-            names = sorted({sample.label for sample in self.samples})
-            labels = {name: idx for idx, name in enumerate(names)}
+            if label_mode == "coarse":
+                labels = dict(COARSE_LABEL_TO_ID)
+            else:
+                names = sorted({sample.label for sample in self.samples})
+                labels = {name: idx for idx, name in enumerate(names)}
         self.label_to_id = labels
         self.id_to_label = {idx: name for name, idx in labels.items()}
 
@@ -120,9 +151,10 @@ class RadarPointCloudDataset(Dataset):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", nargs="?", default=".")
+    parser.add_argument("--label-mode", choices=("fine", "coarse"), default="fine")
     args = parser.parse_args()
 
-    dataset = RadarPointCloudDataset(args.root)
+    dataset = RadarPointCloudDataset(args.root, label_mode=args.label_mode)
     print(f"samples: {len(dataset)}")
     print(f"labels: {dataset.label_to_id}")
     item = dataset[0]
